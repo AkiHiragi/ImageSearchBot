@@ -5,6 +5,7 @@ using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.InputFiles;
 using File = System.IO.File;
 
 namespace ImageSearchBot;
@@ -23,17 +24,16 @@ class Program
         }
         catch (Exception ex)
         {
-            Console.WriteLine("Не удалось загрузить токен из config.json: "+ex.Message);
+            Console.WriteLine("Не удалось загрузить токен из config.json: " + ex.Message);
             return;
         }
-        
-        var botClient = new TelegramBotClient(telegramToken);
 
-        using var cts = new CancellationTokenSource();
+        var       botClient = new TelegramBotClient(telegramToken);
+        using var cts       = new CancellationTokenSource();
 
         var receiverOptions = new ReceiverOptions
         {
-            AllowedUpdates = Array.Empty<UpdateType>() // получаем все обновления
+            AllowedUpdates = Array.Empty<UpdateType>()
         };
 
         botClient.StartReceiving(
@@ -74,7 +74,7 @@ class Program
 
                     await bot.SendPhotoAsync(
                         chatId: message.Chat.Id,
-                        photo: new Telegram.Bot.Types.InputFiles.InputOnlineFile(stream, "image.jpg"),
+                        photo: new InputOnlineFile(stream, "image.jpg"),
                         cancellationToken: ct);
 
                     Console.WriteLine("Картинка отправлена ✅");
@@ -82,7 +82,8 @@ class Program
                 catch (Exception ex)
                 {
                     Console.WriteLine($"Ошибка при отправке картинки: {ex.Message}");
-                    await bot.SendTextMessageAsync(message.Chat.Id, "Произошла ошибка при отправке изображения 😢", cancellationToken: ct);
+                    await bot.SendTextMessageAsync(message.Chat.Id, "Произошла ошибка при отправке изображения 😢",
+                                                   cancellationToken: ct);
                 }
             }
             else
@@ -90,9 +91,42 @@ class Program
                 await bot.SendTextMessageAsync(message.Chat.Id, "Картинка не найдена 🙁", cancellationToken: ct);
             }
         }
+        else if (messageText.StartsWith("/random"))
+        {
+            var tagPart   = messageText[7..].Trim();
+            var tags      = string.Join("+", tagPart.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+            var imageUrls = await FetchRandomImages(tags, 3);
+
+            if (imageUrls.Count > 0)
+            {
+                foreach (var url in imageUrls)
+                {
+                    try
+                    {
+                        using var httpClient = new HttpClient();
+                        var       stream     = await httpClient.GetStreamAsync(url);
+
+                        await bot.SendPhotoAsync(
+                            chatId: message.Chat.Id,
+                            photo: new InputOnlineFile(stream, "image.jpg"),
+                            cancellationToken: ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Ошибка при отправке картинки: {ex.Message}");
+                    }
+                }
+            }
+            else
+            {
+                await bot.SendTextMessageAsync(message.Chat.Id, "Картинки не найдены 🙁", cancellationToken: ct);
+            }
+        }
         else
         {
-            await bot.SendTextMessageAsync(message.Chat.Id, "Напиши /image <тег>, чтобы найти картинку", cancellationToken: ct);
+            await bot.SendTextMessageAsync(message.Chat.Id,
+                                           "Напиши /image <тег> или /random <тег?>, чтобы найти картинки",
+                                           cancellationToken: ct);
         }
     }
 
@@ -115,10 +149,13 @@ class Program
         try
         {
             var json = await client.GetStringAsync(url);
-            var data = JsonSerializer.Deserialize<List<YanderePost>>(json);
+            var data = JsonSerializer.Deserialize<List<Post>>(json);
 
             if (data != null && data.Count > 0)
-                return data[0].FileUrl;
+            {
+                var result = data[0].FileUrl;
+                return !string.IsNullOrWhiteSpace(result) && result.StartsWith("http") ? result : null;
+            }
         }
         catch (Exception ex)
         {
@@ -128,9 +165,45 @@ class Program
         return null;
     }
 
-    class YanderePost
+    private static async Task<List<string>> FetchRandomImages(string tags, int count)
+    {
+        var tagQuery = string.IsNullOrWhiteSpace(tags) ? "" : $"&tags={Uri.EscapeDataString(tags)}";
+        var url      = $"https://yande.re/post.json?limit=50{tagQuery}";
+
+        using var client = new HttpClient();
+        var       urls   = new List<string>();
+
+        try
+        {
+            var json = await client.GetStringAsync(url);
+            var data = JsonSerializer.Deserialize<Post[]>(json);
+
+            if (data is { Length: > 0 })
+            {
+                var rnd      = new Random();
+                var shuffled = data.OrderBy(_ => rnd.Next()).Take(count);
+                urls.AddRange(shuffled
+                             .Where(p => !string.IsNullOrWhiteSpace(p.FileUrl) && p.FileUrl.StartsWith("http"))
+                             .Select(p => p.FileUrl));
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка загрузки: {ex.Message}");
+        }
+
+        return urls;
+    }
+
+    class Post
     {
         [JsonPropertyName("file_url")]
         public string FileUrl { get; set; } = "";
+        
+        [JsonPropertyName("id")]
+        public int    Id      { get; set; }
+        
+        [JsonPropertyName("tags")]
+        public string Tags    { get; set; } = "";
     }
 }
