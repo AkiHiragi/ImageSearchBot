@@ -1,3 +1,7 @@
 {
-    "telegram_token": "INSERT_YOUR_TOKEN_HERE"
+    "telegram_token": "INSERT_YOUR_TOKEN_HERE",
+    "max_image_size": 1280,
+    "max_attempts": 3,
+    "default_page_limit": 50,
+    "images_per_page": 20
 }
